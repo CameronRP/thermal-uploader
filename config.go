@@ -11,10 +11,12 @@ import (
 )
 
 type Config struct {
-	ServerURL  string `yaml:"server-url"`
-	Group      string `yaml:"group"`
-	DeviceName string `yaml:"device-name"`
-	Directory  string `yaml:"directory"`
+	ServerURL         string `yaml:"server-url"`
+	Group             string `yaml:"group"`
+	DeviceName        string `yaml:"device-name"`
+	Directory         string `yaml:"directory"`
+	BushnetServerName string `yaml:"bushnet-server-name"`
+	BushnetServerPort int    `yaml:"bushnet-server-port"`
 }
 
 func (conf *Config) Validate() error {
@@ -29,6 +31,12 @@ func (conf *Config) Validate() error {
 	}
 	if conf.Directory == "" {
 		return errors.New("directory missing")
+	}
+	if conf.BushnetServerName == "" {
+		return errors.New("bushnet server name missing")
+	}
+	if conf.BushnetServerPort == 0 {
+		return errors.New("bushnet server port missing")
 	}
 	return nil
 }

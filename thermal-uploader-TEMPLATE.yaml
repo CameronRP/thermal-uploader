@@ -15,3 +15,9 @@ group: "GROUP"
 
 # The unique name to use for this device.
 device-name: "DEVICE"
+
+# The name of the local bushnet server, include .local in this
+bushnet-server-name: "bushnet-server.local"
+
+# The port used by the bushnet serverURL
+bushnet-serer-port: 1081

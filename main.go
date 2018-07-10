@@ -70,28 +70,61 @@ func runMain() error {
 			return err
 		}
 	}
+	bushnetAPI := NewBushnetAPI(conf.BushnetServerName, conf.BushnetServerPort)
 
 	log.Println("making failed uploads directory")
 	os.MkdirAll(filepath.Join(conf.Directory, failedUploadsDir), 0755)
 
-	log.Println("watching", conf.Directory)
-	fsEvents := make(chan notify.EventInfo, 1)
-	if err := notify.Watch(conf.Directory, fsEvents, notify.InCloseWrite, notify.InMovedTo); err != nil {
+	tryUploadEvent, err := makeTryUploadEvent(conf.Directory, bushnetAPI)
+	if err != nil {
 		return err
 	}
-	defer notify.Stop(fsEvents)
 	for {
 		// Check for files to upload first in case there are CPTV
 		// files around when the uploader starts.
-		if err := uploadFiles(api, conf.Directory); err != nil {
+		if err := uploadFiles(api, bushnetAPI, conf.Directory); err != nil {
 			return err
 		}
 		// Block until there's activity in the directory. We don't
 		// care what it is as uploadFiles will only act on CPTV
 		// files.
-		<-fsEvents
+		<-tryUploadEvent
 	}
 	return nil
+}
+
+func makeTryUploadEvent(fileDirectory string, bushnetAPI *BushnetAPI) (chan bool, error) {
+	tryUploadEvent := make(chan bool)
+	// Addind event when the bushnet server is detected
+	go func() {
+		for {
+			time.Sleep(10 * time.Second)
+			if bushnetAPI.IsAvailable() {
+				log.Println("found bushnet server")
+				tryUploadEvent <- true
+				for bushnetAPI.IsAvailable() {
+					time.Sleep(10 * time.Second)
+				}
+				log.Println("lost bushnet server")
+			}
+		}
+	}()
+
+	// Adding event when new file is detected
+	fsEvents := make(chan notify.EventInfo, 1)
+	if err := notify.Watch(fileDirectory, fsEvents, notify.InCloseWrite, notify.InMovedTo); err != nil {
+		return nil, err
+	}
+	log.Println("watching", fileDirectory)
+	go func() {
+		defer notify.Stop(fsEvents)
+		for {
+			<-fsEvents
+			tryUploadEvent <- true
+		}
+	}()
+
+	return tryUploadEvent, nil
 }
 
 func genPrivConfigFilename(confFilename string) string {
@@ -100,10 +133,10 @@ func genPrivConfigFilename(confFilename string) string {
 	return filepath.Join(dirname, bareFilename+"-priv.yaml")
 }
 
-func uploadFiles(api *CacophonyAPI, directory string) error {
+func uploadFiles(api *CacophonyAPI, bushnetAPI *BushnetAPI, directory string) error {
 	matches, _ := filepath.Glob(filepath.Join(directory, cptvGlob))
 	for _, filename := range matches {
-		err := uploadFileWithRetries(api, filename)
+		err := uploadFileWithRetries(api, bushnetAPI, filename)
 		if err != nil {
 			return err
 		}
@@ -111,7 +144,7 @@ func uploadFiles(api *CacophonyAPI, directory string) error {
 	return nil
 }
 
-func uploadFileWithRetries(api *CacophonyAPI, filename string) error {
+func uploadFileWithRetries(api *CacophonyAPI, bushnetAPI *BushnetAPI, filename string) error {
 	log.Printf("uploading: %s", filename)
 
 	info, err := extractCPTVInfo(filename)
@@ -122,7 +155,7 @@ func uploadFileWithRetries(api *CacophonyAPI, filename string) error {
 	log.Printf("ts=%s duration=%ds", info.timestamp, info.duration)
 
 	for remainingTries := 2; remainingTries >= 0; remainingTries-- {
-		err := uploadFile(api, filename, info)
+		err := uploadFile(api, bushnetAPI, filename, info)
 		if err == nil {
 			log.Printf("upload complete: %s", filename)
 			os.Remove(filename)
@@ -137,7 +170,7 @@ func uploadFileWithRetries(api *CacophonyAPI, filename string) error {
 	return os.Rename(filename, filepath.Join(dir, failedUploadsDir, name))
 }
 
-func uploadFile(api *CacophonyAPI, filename string, info *cptvInfo) error {
+func uploadFile(api *CacophonyAPI, bushnetAPI *BushnetAPI, filename string, info *cptvInfo) error {
 	f, err := os.Open(filename)
 	if os.IsNotExist(err) {
 		// File disappeared since the event was generated. Ignore.
@@ -146,6 +179,9 @@ func uploadFile(api *CacophonyAPI, filename string, info *cptvInfo) error {
 		return err
 	}
 	defer f.Close()
+	if bushnetAPI.IsAvailable() {
+		return bushnetAPI.UploadFile(bufio.NewReader(f))
+	}
 	return api.UploadThermalRaw(info, bufio.NewReader(f))
 }
 
